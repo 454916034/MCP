@@ -15,12 +15,65 @@ export default async function handler(req, res) {
       status: 'running',
       server: 'MCP Search Server',
       version: '1.0.0',
-      usage: 'Send POST requests to /api/mcp with JSON-RPC format'
+      instructions: {
+        method: 'POST',
+        url: '/api/mcp',
+        contentType: 'application/json',
+        example: {
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'initialize',
+          params: {}
+        }
+      }
     });
   }
 
   try {
-    const { jsonrpc = '2.0', method, id, params } = req.body;
+    // 解析请求体
+    const body = req.body;
+    
+    // 调试日志
+    console.log('Request body:', JSON.stringify(body, null, 2));
+    
+    // 检查 body 是否存在
+    if (!body) {
+      return res.json({
+        jsonrpc: '2.0',
+        id: null,
+        error: {
+          code: -32700,
+          message: 'Parse error: No request body'
+        }
+      });
+    }
+
+    // 提取字段，兼容不同格式
+    const jsonrpc = body.jsonrpc || '2.0';
+    const id = body.id || null;
+    const method = body.method;
+    const params = body.params || {};
+
+    // 检查 method 是否存在
+    if (method === undefined || method === null) {
+      return res.json({
+        jsonrpc: '2.0',
+        id: id,
+        error: {
+          code: -32600,
+          message: 'Invalid request: method is required',
+          data: {
+            received: body,
+            expected: {
+              jsonrpc: '2.0',
+              id: 1,
+              method: 'initialize',
+              params: {}
+            }
+          }
+        }
+      });
+    }
 
     // 处理 initialize 方法
     if (method === 'initialize') {
@@ -40,9 +93,8 @@ export default async function handler(req, res) {
       });
     }
 
-    // 处理 notifications/initialized 方法（无响应）
+    // 处理 notifications/initialized 方法
     if (method === 'notifications/initialized') {
-      // 根据 MCP 协议，通知不需要响应
       return res.status(204).end();
     }
 
@@ -79,8 +131,8 @@ export default async function handler(req, res) {
 
     // 处理 tools/call 方法
     if (method === 'tools/call') {
-      const toolName = params?.name;
-      const args = params?.arguments || {};
+      const toolName = params.name;
+      const args = params.arguments || {};
 
       if (toolName === 'web_search') {
         const query = args.query || 'test';
@@ -107,7 +159,6 @@ export default async function handler(req, res) {
           }
         });
       } else {
-        // 未知工具
         return res.json({
           jsonrpc: '2.0',
           id: id,
@@ -133,7 +184,7 @@ export default async function handler(req, res) {
     console.error('Server error:', error);
     return res.json({
       jsonrpc: '2.0',
-      id: req.body?.id,
+      id: req.body?.id || null,
       error: {
         code: -32603,
         message: error.message
@@ -153,7 +204,6 @@ async function searchWeb(query, numResults) {
 
     const results = [];
 
-    // 即时回答
     if (data.Answer) {
       results.push({
         title: '即时回答',
@@ -163,7 +213,6 @@ async function searchWeb(query, numResults) {
       });
     }
 
-    // 相关话题
     if (data.RelatedTopics) {
       for (const topic of data.RelatedTopics.slice(0, numResults)) {
         if (topic.Text) {
@@ -177,7 +226,6 @@ async function searchWeb(query, numResults) {
       }
     }
 
-    // 如果没有结果
     if (results.length === 0) {
       results.push({
         title: '搜索建议',
