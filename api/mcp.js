@@ -7,7 +7,7 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.json({ message: 'MCP Server is running' });
 
   try {
-    const { method, id, params } = req.body;
+    const { method, id } = req.body;
 
     if (method === 'initialize') {
       return res.json({
@@ -26,12 +26,11 @@ export default async function handler(req, res) {
         result: {
           tools: [{
             name: 'web_search',
-            description: '搜索互联网信息，返回标题、摘要和链接',
+            description: '搜索互联网信息',
             inputSchema: {
               type: 'object',
               properties: {
-                query: { type: 'string', description: '搜索关键词' },
-                num_results: { type: 'integer', description: '结果数量（默认5）', default: 5 }
+                query: { type: 'string', description: '搜索关键词' }
               },
               required: ['query']
             }
@@ -41,11 +40,31 @@ export default async function handler(req, res) {
     }
 
     if (method === 'tools/call') {
-      const query = params?.arguments?.query || 'test';
-      const numResults = params?.arguments?.num_results || 5;
+      const query = req.body.params?.arguments?.query || 'test';
+      const encodedQuery = encodeURIComponent(query);
       
-      const results = await searchGoogle(query, numResults);
-      
+      // 返回多个搜索链接
+      const results = [
+        {
+          title: '百度搜索',
+          content: `点击链接查看"${query}"的搜索结果`,
+          url: `https://www.baidu.com/s?wd=${encodedQuery}`,
+          source: 'Baidu'
+        },
+        {
+          title: '百度新闻',
+          content: `查看"${query}"的最新新闻`,
+          url: `https://news.baidu.com/ns?word=${encodedQuery}`,
+          source: 'Baidu News'
+        },
+        {
+          title: '知乎讨论',
+          content: `查看"${query}"在知乎上的讨论`,
+          url: `https://www.zhihu.com/search?type=content&q=${encodedQuery}`,
+          source: 'Zhihu'
+        }
+      ];
+
       return res.json({
         jsonrpc: '2.0', id,
         result: {
@@ -54,7 +73,7 @@ export default async function handler(req, res) {
             text: JSON.stringify({
               query,
               results,
-              source: 'Google Custom Search',
+              source: 'Multiple Search Engines',
               timestamp: new Date().toISOString()
             }, null, 2)
           }]
@@ -73,62 +92,4 @@ export default async function handler(req, res) {
       error: { code: -32603, message: error.message }
     });
   }
-}
-
-async function searchGoogle(query, numResults) {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  const searchEngineId = process.env.GOOGLE_SEARCH_ENGINE_ID;
-
-  if (!apiKey || !searchEngineId) {
-    console.log('Google API not configured, using fallback');
-    return searchFallback(query, numResults);
-  }
-
-  try {
-    const url = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&num=${numResults}`;
-    
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (data.error) {
-      console.error('Google API error:', data.error);
-      return searchFallback(query, numResults);
-    }
-
-    return data.items?.map(item => ({
-      title: item.title,
-      content: item.snippet,
-      url: item.link,
-      source: 'Google'
-    })) || [];
-
-  } catch (error) {
-    console.error('Google search failed:', error);
-    return searchFallback(query, numResults);
-  }
-}
-
-function searchFallback(query, numResults) {
-  const encodedQuery = encodeURIComponent(query);
-  
-  return [
-    {
-      title: '百度搜索',
-      content: `在百度中搜索：${query}`,
-      url: `https://www.baidu.com/s?wd=${encodedQuery}`,
-      source: 'Baidu'
-    },
-    {
-      title: '百度新闻',
-      content: `查看最新新闻：${query}`,
-      url: `https://news.baidu.com/ns?word=${encodedQuery}`,
-      source: 'Baidu News'
-    },
-    {
-      title: '知乎',
-      content: `查看知乎讨论：${query}`,
-      url: `https://www.zhihu.com/search?type=content&q=${encodedQuery}`,
-      source: 'Zhihu'
-    }
-  ].slice(0, numResults);
 }
