@@ -1,57 +1,200 @@
 export default async function handler(req, res) {
+  // 设置 CORS
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
 
-  if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method !== 'POST') return res.json({ message: 'MCP Search Server is running' });
+  // 处理 OPTIONS 请求
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end();
+  }
+
+  // 首页返回状态信息
+  if (req.method !== 'POST') {
+    return res.json({
+      status: 'running',
+      server: 'MCP Search Server',
+      version: '1.0.0',
+      usage: 'Send POST requests to /api/mcp with JSON-RPC format'
+    });
+  }
 
   try {
-    const { method, id } = req.body;
+    const { jsonrpc = '2.0', method, id, params } = req.body;
 
+    // 处理 initialize 方法
     if (method === 'initialize') {
       return res.json({
-        jsonrpc: '2.0', id,
+        jsonrpc: '2.0',
+        id: id,
         result: {
           protocolVersion: '2024-11-05',
-          serverInfo: { name: 'mcp-search', version: '1.0.0' },
-          capabilities: { tools: {} }
+          serverInfo: {
+            name: 'mcp-search-server',
+            version: '1.0.0'
+          },
+          capabilities: {
+            tools: {}
+          }
         }
       });
     }
 
+    // 处理 notifications/initialized 方法（无响应）
+    if (method === 'notifications/initialized') {
+      // 根据 MCP 协议，通知不需要响应
+      return res.status(204).end();
+    }
+
+    // 处理 tools/list 方法
     if (method === 'tools/list') {
       return res.json({
-        jsonrpc: '2.0', id,
+        jsonrpc: '2.0',
+        id: id,
         result: {
-          tools: [{
-            name: 'web_search',
-            description: '搜索互联网信息',
-            inputSchema: {
-              type: 'object',
-              properties: { query: { type: 'string', description: '搜索关键词' } },
-              required: ['query']
+          tools: [
+            {
+              name: 'web_search',
+              description: '在互联网上搜索信息',
+              inputSchema: {
+                type: 'object',
+                properties: {
+                  query: {
+                    type: 'string',
+                    description: '搜索关键词'
+                  },
+                  num_results: {
+                    type: 'integer',
+                    description: '返回结果数量（默认5）',
+                    default: 5
+                  }
+                },
+                required: ['query']
+              }
             }
-          }]
+          ]
         }
       });
     }
 
+    // 处理 tools/call 方法
     if (method === 'tools/call') {
-      const query = req.body.params?.arguments?.query || 'test';
-      const results = [{
-        title: '搜索结果',
-        content: `你搜索了：${query}`,
-        url: `https://duckduckgo.com/?q=${encodeURIComponent(query)}`
-      }];
-      return res.json({
-        jsonrpc: '2.0', id,
-        result: { content: [{ type: 'text', text: JSON.stringify({ query, results }, null, 2) }] }
+      const toolName = params?.name;
+      const args = params?.arguments || {};
+
+      if (toolName === 'web_search') {
+        const query = args.query || 'test';
+        const numResults = args.num_results || 5;
+
+        // 执行搜索
+        const results = await searchWeb(query, numResults);
+
+        return res.json({
+          jsonrpc: '2.0',
+          id: id,
+          result: {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify({
+                  query: query,
+                  results: results,
+                  source: 'DuckDuckGo',
+                  timestamp: new Date().toISOString()
+                }, null, 2)
+              }
+            ]
+          }
+        });
+      } else {
+        // 未知工具
+        return res.json({
+          jsonrpc: '2.0',
+          id: id,
+          error: {
+            code: -32602,
+            message: `Tool not found: ${toolName}`
+          }
+        });
+      }
+    }
+
+    // 未知方法
+    return res.json({
+      jsonrpc: '2.0',
+      id: id,
+      error: {
+        code: -32601,
+        message: `Method not found: ${method}`
+      }
+    });
+
+  } catch (error) {
+    console.error('Server error:', error);
+    return res.json({
+      jsonrpc: '2.0',
+      id: req.body?.id,
+      error: {
+        code: -32603,
+        message: error.message
+      }
+    });
+  }
+}
+
+// 搜索函数
+async function searchWeb(query, numResults) {
+  try {
+    const encodedQuery = encodeURIComponent(query);
+    const url = `https://api.duckduckgo.com/?q=${encodedQuery}&format=json&no_html=1&skip_disambig=1`;
+
+    const response = await fetch(url);
+    const data = await response.json();
+
+    const results = [];
+
+    // 即时回答
+    if (data.Answer) {
+      results.push({
+        title: '即时回答',
+        content: data.Answer,
+        url: data.AnswerURL || '',
+        type: 'answer'
       });
     }
 
-    return res.json({ error: 'Unknown method' });
+    // 相关话题
+    if (data.RelatedTopics) {
+      for (const topic of data.RelatedTopics.slice(0, numResults)) {
+        if (topic.Text) {
+          results.push({
+            title: topic.Text.substring(0, 100),
+            content: topic.Text,
+            url: topic.FirstURL || '',
+            type: 'related'
+          });
+        }
+      }
+    }
+
+    // 如果没有结果
+    if (results.length === 0) {
+      results.push({
+        title: '搜索建议',
+        content: `建议搜索：${query}`,
+        url: `https://duckduckgo.com/?q=${encodedQuery}`,
+        type: 'suggestion'
+      });
+    }
+
+    return results.slice(0, numResults);
+
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    return [{
+      title: '搜索错误',
+      content: `搜索失败：${error.message}`,
+      url: '',
+      type: 'error'
+    }];
   }
 }
